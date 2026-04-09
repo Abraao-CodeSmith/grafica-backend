@@ -9,40 +9,50 @@ CORS(app)
 
 DB_PATH = 'servicos.db'
 
-# Cache para evitar ler o banco a cada requisição
 @lru_cache(maxsize=1)
 def get_all_servicos():
-    """Carrega todos os serviços em cache por 5 minutos"""
+    """Carrega todos os serviços em cache"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
     cursor.execute("SELECT codigo, categoria, descricao, cores, peso, qtde, tam, prazo, preco FROM servicos")
     results = cursor.fetchall()
     conn.close()
-    
     return [dict(row) for row in results]
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Endpoint leve para keep-alive - SEM banco de dados"""
+    """Endpoint leve para keep-alive - use ESTE no cronjob"""
+    print("Health check chamado")
     return jsonify({"status": "ok", "timestamp": time.time()}), 200
+
+@app.before_first_request
+def warmup():
+    get_all_servicos()
 
 @app.route('/api/servicos')
 def buscar_servicos():
     args = request.args
-    nome = args.get("nome", "").lower()
+    nome      = args.get("nome", "").lower()
     categoria = args.get("categoria", "")
     descricao = args.get("descricao", "")
-    tam = args.get("tam", "")
-    cores = args.get("cores", "")
-    qtde = args.get("qtde", "")
-    comissao = float(args.get("comissao", "0").replace(",", "."))
-    
-    # Carrega do cache (apenas uma vez a cada 5 minutos)
+    tam       = args.get("tam", "")
+    cores     = args.get("cores", "")
+    qtde      = args.get("qtde", "")
+    comissao  = float(args.get("comissao", "0").replace(",", "."))
+
+    # Paginação — página 1 com 50 itens por padrão
+    try:
+        pagina = int(args.get("pagina", 1))
+        por_pagina = int(args.get("por_pagina", 50))
+    except ValueError:
+        pagina, por_pagina = 1, 50
+
+    # Limita para evitar respostas gigantes acidentais
+    por_pagina = min(por_pagina, 200)
+
     servicos_raw = get_all_servicos()
-    
-    # Filtra em memória (mais rápido que SQL com muitos parâmetros)
+
     resultados = []
     for row in servicos_raw:
         if nome and nome not in row["descricao"].lower():
@@ -57,35 +67,39 @@ def buscar_servicos():
             continue
         if qtde and qtde != "Todos" and str(row["qtde"]) != qtde:
             continue
-            
+
         preco_base = row["preco"]
         if preco_base is None:
             continue
-            
+
         preco_final = preco_base * (1 + comissao / 100)
         resultados.append({
-            "codigo": row["codigo"],
+            "codigo":    row["codigo"],
             "categoria": row["categoria"],
             "descricao": row["descricao"],
-            "cores": row["cores"],
-            "peso": row["peso"],
-            "qtde": row["qtde"],
-            "tam": row["tam"],
-            "prazo": row["prazo"],
-            "preco": round(preco_final, 2)
+            "cores":     row["cores"],
+            "peso":      row["peso"],
+            "qtde":      row["qtde"],
+            "tam":       row["tam"],
+            "prazo":     row["prazo"],
+            "preco":     round(preco_final, 2)
         })
-    
-    return jsonify(resultados)
 
-# Opcional: limpar o cache a cada 5 minutos
+    total = len(resultados)
+    inicio = (pagina - 1) * por_pagina
+    fim = inicio + por_pagina
+    pagina_atual = resultados[inicio:fim]
+
+    return jsonify({
+        "total":      total,
+        "pagina":     pagina,
+        "por_pagina": por_pagina,
+        "paginas":    -(-total // por_pagina),  # ceil sem math
+        "dados":      pagina_atual
+    })
+
 def clear_cache():
     get_all_servicos.cache_clear()
-
-# Se quiser, agende a limpeza (mas não é obrigatório)
-# from apscheduler.schedulers.background import BackgroundScheduler
-# scheduler = BackgroundScheduler()
-# scheduler.add_job(func=clear_cache, trigger="interval", minutes=5)
-# scheduler.start()
 
 if __name__ == '__main__':
     app.run(debug=True)
