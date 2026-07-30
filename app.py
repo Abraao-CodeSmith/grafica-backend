@@ -41,15 +41,12 @@ def buscar_servicos():
     qtde      = args.get("qtde", "")
     comissao  = float(args.get("comissao", "0").replace(",", "."))
 
-    # Paginação — página 1 com 50 itens por padrão
+    # Paginação
     try:
         pagina = int(args.get("pagina", 1))
         por_pagina = int(args.get("por_pagina", 50))
     except ValueError:
         pagina, por_pagina = 1, 50
-
-    # Limita para evitar respostas gigantes acidentais
-    por_pagina = min(por_pagina, 200)
 
     servicos_raw = get_all_servicos()
 
@@ -86,15 +83,25 @@ def buscar_servicos():
         })
 
     total = len(resultados)
-    inicio = (pagina - 1) * por_pagina
-    fim = inicio + por_pagina
-    pagina_atual = resultados[inicio:fim]
+
+    # Se por_pagina for 0, retorna TODOS os registros encontrados
+    if por_pagina == 0:
+        pagina_atual = resultados
+        total_paginas = 1
+        por_pagina_retorno = total
+    else:
+        # Se for maior que 0, faz a fatia (slice) normal da paginação
+        inicio = (pagina - 1) * por_pagina
+        fim = inicio + por_pagina
+        pagina_atual = resultados[inicio:fim]
+        total_paginas = -(-total // por_pagina) if por_pagina > 0 else 1
+        por_pagina_retorno = por_pagina
 
     return jsonify({
         "total":      total,
         "pagina":     pagina,
-        "por_pagina": por_pagina,
-        "paginas":    -(-total // por_pagina),  # ceil sem math
+        "por_pagina": por_pagina_retorno,
+        "paginas":    total_paginas,
         "dados":      pagina_atual
     })
 
